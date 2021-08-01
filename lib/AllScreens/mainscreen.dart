@@ -4,6 +4,7 @@ import 'package:animated_text_kit/animated_text_kit.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_geofire/flutter_geofire.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -14,8 +15,10 @@ import 'package:uber_rider_app/AllScreens/searchScreen.dart';
 import 'package:uber_rider_app/AllWidgets/divider.dart';
 import 'package:uber_rider_app/AllWidgets/progressDialog.dart';
 import 'package:uber_rider_app/Assistants/assistantMethode.dart';
+import 'package:uber_rider_app/Assistants/geoFireAssistant.dart';
 import 'package:uber_rider_app/DataHandler/appData.dart';
 import 'package:uber_rider_app/Models/directionDetails.dart';
+import 'package:uber_rider_app/Models/nearbyAvailableDrivers.dart';
 import 'package:uber_rider_app/configMaps.dart';
 
 class MainScreen extends StatefulWidget {
@@ -47,8 +50,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   double searchContainerHeight = 300.0;
 
   bool drawerOpen = true;
+  bool nearbyAvailableDriverKeysLoaded = false;
 
   DatabaseReference? rideRequestRef;
+  
+  BitmapDescriptor? nearbyIcon;
 
   @override
   void initState() {
@@ -57,11 +63,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     AssistantMethod.getCurrentOnlineUserInfo();
   }
 
-  void saveRideRequest(){
-    rideRequestRef = FirebaseDatabase.instance.reference().child("Ride Requests").push();
+  void saveRideRequest() {
+    rideRequestRef =
+        FirebaseDatabase.instance.reference().child("Ride Requests").push();
 
-    var pickUp = Provider.of<AppData>(context,listen: false).pickUpLocation;
-    var dropOff = Provider.of<AppData>(context,listen: false).dropOffLocation;
+    var pickUp = Provider.of<AppData>(context, listen: false).pickUpLocation;
+    var dropOff = Provider.of<AppData>(context, listen: false).dropOffLocation;
 
     Map pickUpLocMap = {
       "latitude": pickUp!.latiude.toString(),
@@ -84,16 +91,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       "pickup_address": pickUp.placeName,
       "dropoff_address": dropOff.placeName,
     };
-    
+
     rideRequestRef!.set(rideInfoMap);
   }
 
-  void cancelRideRequest(){
+  void cancelRideRequest() {
     rideRequestRef!.remove();
-
   }
 
-  void displayRequestRideContanier(){
+  void displayRequestRideContanier() {
     setState(() {
       requestRiderContainerHeight = 250.0;
       riderDetailsContainerHeight = 0;
@@ -159,6 +165,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     String address =
         await AssistantMethod.searchCoordinateAddress(position, context);
     print("This is your address :: " + address);
+
+    initGeoFireListner();
+
   }
 
   static final CameraPosition _kGooglePlex = CameraPosition(
@@ -168,6 +177,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    createIconMarker();
     return Scaffold(
       key: scaffoldKey,
       appBar: AppBar(
@@ -225,9 +235,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 title: Text('About', style: TextStyle(fontSize: 15.0)),
               ),
               GestureDetector(
-                onTap: (){
+                onTap: () {
                   FirebaseAuth.instance.signOut();
-                  Navigator.pushNamedAndRemoveUntil(context, LoginScreen.idScreen, (route) => false);
+                  Navigator.pushNamedAndRemoveUntil(
+                      context, LoginScreen.idScreen, (route) => false);
                 },
                 child: ListTile(
                   leading: Icon(Icons.logout),
@@ -610,7 +621,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     ),
                     SizedBox(height: 22.0),
                     GestureDetector(
-                      onTap: (){
+                      onTap: () {
                         cancelRideRequest();
                         resetApp();
                       },
@@ -620,7 +631,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(26.0),
-                          border: Border.all(width: 2.0, color: Colors.grey[300]!),
+                          border:
+                              Border.all(width: 2.0, color: Colors.grey[300]!),
                         ),
                         child: Icon(
                           Icons.close,
@@ -765,4 +777,90 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       circlesSet.add(dropOffLocCircle);
     });
   }
+
+  void initGeoFireListner() {
+    Geofire.initialize("availabeleDrivers");
+    // comment
+    Geofire.queryAtLocation(
+            currentPosition.latitude, currentPosition.longitude, 15)!
+        .listen((map) {
+      print(map);
+      if (map != null) {
+        var callBack = map['callBack'];
+
+        switch (callBack) {
+          case Geofire.onKeyEntered:
+            NearbyAvailableDrivers nearbyAvailableDrivers =
+                NearbyAvailableDrivers();
+            nearbyAvailableDrivers.key = map['key'];
+            nearbyAvailableDrivers.latitude = map['latitude'];
+            nearbyAvailableDrivers.longitude = map['longitude'];
+            GeoFireAssistant.nearByAvailableDriversList
+                .add(nearbyAvailableDrivers);
+            if(nearbyAvailableDriverKeysLoaded == true){
+              updateAvailableDriversOnMap();
+            }
+            break;
+
+          case Geofire.onKeyExited:
+            GeoFireAssistant.removeDriverFromList(map['key']);
+            updateAvailableDriversOnMap();
+            break;
+
+          case Geofire.onKeyMoved:
+            NearbyAvailableDrivers nearbyAvailableDrivers =
+                NearbyAvailableDrivers();
+            nearbyAvailableDrivers.key = map['key'];
+            nearbyAvailableDrivers.latitude = map['latitude'];
+            nearbyAvailableDrivers.longitude = map['longitude'];
+            GeoFireAssistant.updateDriverNeatbyLocation(nearbyAvailableDrivers);
+            updateAvailableDriversOnMap();
+            break;
+
+          case Geofire.onGeoQueryReady:
+            updateAvailableDriversOnMap();
+            break;
+        }
+      }
+
+      setState(() {});
+    });
+    // comment
+  }
+
+  void updateAvailableDriversOnMap() {
+    setState(() {
+      markersSet.clear();
+    });
+
+    Set<Marker> tMarkers = Set<Marker>();
+    for (NearbyAvailableDrivers driver
+        in GeoFireAssistant.nearByAvailableDriversList) {
+      LatLng driverAvailablePosition =
+          LatLng(driver.latitude!, driver.longitude!);
+
+      Marker marker = Marker(
+        markerId: MarkerId('driver${driver.key}'),
+        position: driverAvailablePosition,
+        icon: nearbyIcon!,
+        rotation: AssistantMethod.createRandomNumber(360),
+      );
+
+      tMarkers.add(marker);
+    }
+    setState(() {
+      markersSet = tMarkers;
+    });
+  }
+
+  void createIconMarker(){
+    if(nearbyIcon == null){
+      ImageConfiguration imageConfiguration = createLocalImageConfiguration(context,size: Size(2,2));
+      BitmapDescriptor.fromAssetImage(imageConfiguration, "assets/images/car_ios.png")
+          .then((value){
+            nearbyIcon = value;
+      });
+    }
+  }
+
 }
